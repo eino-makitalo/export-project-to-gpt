@@ -1,0 +1,305 @@
+<project>
+  
+    <file path="c:\P\ai-extension-helper\tsconfig.json">
+      <content><![CDATA[
+{
+	"compilerOptions": {
+		"module": "Node16",
+		"target": "ES2022",
+		"outDir": "out",
+		"lib": [
+			"ES2022"
+		],
+		"sourceMap": true,
+		"rootDir": "src",
+		"strict": true,   /* enable all strict type-checking options */
+		/* Additional Checks */
+		// "noImplicitReturns": true, /* Report error when not all code paths in function return a value. */
+		// "noFallthroughCasesInSwitch": true, /* Report errors for fallthrough cases in switch statement. */
+		// "noUnusedParameters": true,  /* Report errors on unused parameters. */
+	}
+}
+
+      ]]></content>
+    </file>
+
+    <file path="c:\P\ai-extension-helper\src\extension.ts">
+      <content><![CDATA[
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+
+/**
+ * Key used for storing file paths in workspaceState.
+ */
+const CHECKED_PATHS_KEY = 'ai-code-exporter.checkedPaths';
+
+/** Represents each item in the tree (folder or file). */
+class MyTreeItem extends vscode.TreeItem {
+  public children: MyTreeItem[] | undefined;
+  public fsPath: string;
+  public isDirectory: boolean;
+
+  constructor(fsPath: string, label: string, isDirectory: boolean) {
+    super(
+      label,
+      isDirectory
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None
+    );
+
+    this.fsPath = fsPath;
+    this.isDirectory = isDirectory;
+    this.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
+  }
+}
+
+class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
+  private _onDidChangeTreeData: vscode.EventEmitter<MyTreeItem | undefined | void> =
+    new vscode.EventEmitter<MyTreeItem | undefined | void>();
+  readonly onDidChangeTreeData: vscode.Event<MyTreeItem | undefined | void> =
+    this._onDidChangeTreeData.event;
+
+  private checkedPaths: Set<string> = new Set<string>();
+  private itemCache: Map<string, MyTreeItem> = new Map();
+
+  constructor(private workspaceRoot: string, private context: vscode.ExtensionContext) {
+    const stored = context.workspaceState.get<string[]>(CHECKED_PATHS_KEY) || [];
+    this.checkedPaths = new Set(stored);
+  }
+
+  public async getChildren(element?: MyTreeItem): Promise<MyTreeItem[]> {
+    if (!this.workspaceRoot) {
+      vscode.window.showInformationMessage('No workspace folder is open');
+      return [];
+    }
+
+    let dirPath: string;
+    if (!element) {
+      dirPath = this.workspaceRoot;
+    } else if (element.isDirectory) {
+      dirPath = element.fsPath;
+    } else {
+      return [];
+    }
+
+    try {
+      const childNames = await fs.promises.readdir(dirPath);
+      const items: MyTreeItem[] = [];
+
+      for (const name of childNames) {
+        const fullPath = path.join(dirPath, name);
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          const isDir = stat.isDirectory();
+
+          const item = new MyTreeItem(fullPath, name, isDir);
+          if (this.checkedPaths.has(fullPath)) {
+            item.checkboxState = vscode.TreeItemCheckboxState.Checked;
+          }
+
+          item.command = {
+            command: 'myExportTree.toggleCheckbox',
+            title: 'Toggle Selection',
+            arguments: [item]
+          };
+
+          this.itemCache.set(fullPath, item);
+          items.push(item);
+        } catch (err) {
+          console.error(`Error accessing ${fullPath}:`, err);
+        }
+      }
+
+      items.sort((a, b) => {
+        if (a.isDirectory && !b.isDirectory) return -1;
+        if (!a.isDirectory && b.isDirectory) return 1;
+        return (a.label as string).localeCompare(b.label as string);
+      });
+
+      return items;
+    } catch (err) {
+      console.error(`Error reading directory ${dirPath}:`, err);
+      return [];
+    }
+  }
+
+  public getTreeItem(element: MyTreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  public refresh(): void {
+    this._onDidChangeTreeData.fire();
+  }
+
+  private async getAllFilesInFolder(folderPath: string): Promise<string[]> {
+    const result: string[] = [];
+    try {
+      const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(folderPath, entry.name);
+        if (entry.isDirectory()) {
+          const subFiles = await this.getAllFilesInFolder(fullPath);
+          result.push(...subFiles);
+        } else {
+          result.push(fullPath);
+        }
+      }
+    } catch (err) {
+      console.error(`Error getting files in folder: ${err}`);
+    }
+    return result;
+  }
+
+  public async toggleCheckbox(item: MyTreeItem) {
+    const isChecked = this.checkedPaths.has(item.fsPath);
+    
+    if (isChecked) {
+      // Uncheck this item
+      this.checkedPaths.delete(item.fsPath);
+      item.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
+      
+      if (item.isDirectory) {
+        const files = await this.getAllFilesInFolder(item.fsPath);
+        files.forEach(file => {
+          this.checkedPaths.delete(file);
+          const cachedItem = this.itemCache.get(file);
+          if (cachedItem) {
+            cachedItem.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
+          }
+        });
+      }
+    } else {
+      // Check this item
+      this.checkedPaths.add(item.fsPath);
+      item.checkboxState = vscode.TreeItemCheckboxState.Checked;
+      
+      if (item.isDirectory) {
+        const files = await this.getAllFilesInFolder(item.fsPath);
+        files.forEach(file => {
+          this.checkedPaths.add(file);
+          const cachedItem = this.itemCache.get(file);
+          if (cachedItem) {
+            cachedItem.checkboxState = vscode.TreeItemCheckboxState.Checked;
+          }
+        });
+      }
+    }
+
+    // Save the updated checked paths
+    await this.context.workspaceState.update(CHECKED_PATHS_KEY, Array.from(this.checkedPaths));
+    console.log('Updated checked paths:', Array.from(this.checkedPaths));
+    this.refresh();
+  }
+
+  public getCheckedPaths(): string[] {
+    // Return all checked paths that exist and are files
+    return Array.from(this.checkedPaths).filter(path => {
+      try {
+        const stat = fs.statSync(path);
+        return stat.isFile();
+      } catch (err) {
+        console.error(`Error checking file ${path}:`, err);
+        return false;
+      }
+    });
+  }
+}
+
+/**
+ * Generates XML content from the given file paths
+ */
+function generateXmlContent(paths: string[]): string {
+  console.log('Generating XML for paths:', paths); // Debug log
+  const fileContents: string[] = [];
+  for (const fsPath of paths) {
+    try {
+      const stat = fs.statSync(fsPath);
+      if (stat.isFile()) {
+        const content = fs.readFileSync(fsPath, 'utf8');
+        fileContents.push(`
+    <file path="${escapeXml(fsPath)}">
+      <content><![CDATA[
+${content}
+      ]]></content>
+    </file>`);
+      }
+    } catch (err) {
+      console.error(`Error processing file ${fsPath}:`, err);
+    }
+  }
+
+  return `<project>\n  ${fileContents.join('\n')}\n</project>`;
+}
+
+export function activate(context: vscode.ExtensionContext) {
+  // Create and register the tree provider
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  const rootPath = workspaceFolders && workspaceFolders.length
+    ? workspaceFolders[0].uri.fsPath
+    : '';
+  const treeProvider = new ExportTreeProvider(rootPath, context);
+  vscode.window.registerTreeDataProvider('myExportTree', treeProvider);
+
+  // Register the checkbox toggle command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('myExportTree.toggleCheckbox', (item: MyTreeItem) => {
+      treeProvider.toggleCheckbox(item);
+    })
+  );
+
+  // Register the export checked files command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('myExportTree.exportCheckedToXML', async () => {
+      const checkedPaths = treeProvider.getCheckedPaths();
+      if (!checkedPaths.length) {
+        vscode.window.showInformationMessage('No items selected.');
+        return;
+      }
+
+      const xmlResult = generateXmlContent(checkedPaths);
+
+      const saveUri = await vscode.window.showSaveDialog({
+        filters: { 'XML Files': ['xml'] },
+        defaultUri: vscode.Uri.file('export.xml')
+      });
+      if (saveUri) {
+        fs.writeFileSync(saveUri.fsPath, xmlResult, 'utf8');
+        vscode.window.showInformationMessage(`Exported ${checkedPaths.length} items to ${saveUri.fsPath}`);
+      }
+    })
+  );
+
+  // Register the copy to clipboard command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('myExportTree.copyCheckedToClipboard', async () => {
+      const checkedPaths = treeProvider.getCheckedPaths();
+      if (!checkedPaths.length) {
+        vscode.window.showInformationMessage('No items selected.');
+        return;
+      }
+
+      const xmlResult = generateXmlContent(checkedPaths);
+      await vscode.env.clipboard.writeText(xmlResult);
+      vscode.window.showInformationMessage(`Copied ${checkedPaths.length} items to clipboard as XML`);
+    })
+  );
+}
+
+export function deactivate() {}
+
+/**
+ * A helper function to escape special XML characters.
+ */
+function escapeXml(unsafe: string) {
+  return unsafe
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+      ]]></content>
+    </file>
+</project>
