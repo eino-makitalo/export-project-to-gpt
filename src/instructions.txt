@@ -1,0 +1,15 @@
+Shows tree view with all files in the workspace. 
+Hide gitignore files and behave like they are not in the workspace.
+
+
+when selecting folder it will select all children items except if gitignore is set on (they are hidden)
+when unselecting folder it will unselect all children items
+
+When selecting parent folder it will select all children if they are not already selected (union like work)
+When unselecting parent folder it will unselect all children also those which were selecte before 
+
+Show all ongoing tasks in the status bar
+Clear will unselect everything , clear partial status, and stop ongoing tasks and result must that no items are selected
+
+Copy and export should be dimmed (undoable) during tasks going
+
