@@ -504,26 +504,35 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
    * but the selection state is preserved for when .gitignore is disabled.
    */
   public getCheckedPaths(): string[] {
-    return Array.from(this.checkedPaths).filter(filePath => {
+    // Get all checked paths regardless of visibility state
+    const allCheckedPaths = Array.from(this.checkedPaths);
+    console.log('All checked paths before filtering:', allCheckedPaths);
+
+    // Filter to only include existing files and respect gitignore
+    const validPaths = allCheckedPaths.filter(filePath => {
       try {
-        // First check if the file exists and is a file
+        // Check if path exists and is a file
         const stat = fs.statSync(filePath);
         if (!stat.isFile()) {
+          console.log(`Skipping non-file: ${filePath}`);
           return false;
         }
 
-        // If gitignore is enabled, exclude ignored files from output
+        // Check gitignore if enabled
         if (this.useGitignore && !this.shouldIncludePath(filePath)) {
-          console.log(`Excluding ${filePath} from output (gitignored but selection preserved)`);
+          console.log(`Excluding gitignored file: ${filePath}`);
           return false;
         }
 
         return true;
       } catch (err) {
-        console.error(`Error checking file ${filePath}:`, err);
+        console.log(`Error checking path ${filePath}:`, err);
         return false;
       }
     });
+
+    console.log('Final valid paths:', validPaths);
+    return validPaths;
   }
 
   /**
