@@ -212,7 +212,16 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
   }
 
   public async clearSelections(): Promise<void> {
+    // Clear the checked paths set
     this.checkedPaths.clear();
+
+    // Clear all item states in cache
+    for (const item of this.itemCache.values()) {
+      item.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
+      item.clearPartialState();
+    }
+
+    // Update storage and refresh
     await this.context.workspaceState.update(CHECKED_PATHS_KEY, []);
     this.refresh();
   }
@@ -294,11 +303,11 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     if (element.isDirectory) {
       const dirPath = element.fsPath;
       try {
-        const childNames = await fs.promises.readdir(dirPath);
-        const items: MyTreeItem[] = [];
+    const childNames = await fs.promises.readdir(dirPath);
+    const items: MyTreeItem[] = [];
 
-        for (const name of childNames) {
-          const fullPath = path.join(dirPath, name);
+    for (const name of childNames) {
+      const fullPath = path.join(dirPath, name);
           
           // Skip if path should be excluded
           if (!this.shouldIncludePath(fullPath)) {
@@ -306,8 +315,8 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
           }
 
           try {
-            const stat = await fs.promises.stat(fullPath);
-            const isDir = stat.isDirectory();
+      const stat = await fs.promises.stat(fullPath);
+      const isDir = stat.isDirectory();
 
             // Check cache first
             let item = this.itemCache.get(fullPath);
@@ -324,23 +333,23 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
             }
 
             // Only set checked state if explicitly checked
-            if (this.checkedPaths.has(fullPath)) {
-              item.checkboxState = vscode.TreeItemCheckboxState.Checked;
-            }
+      if (this.checkedPaths.has(fullPath)) {
+        item.checkboxState = vscode.TreeItemCheckboxState.Checked;
+      }
 
-            items.push(item);
+      items.push(item);
           } catch (err) {
             console.error(`Error accessing ${fullPath}:`, err);
           }
-        }
+    }
 
-        items.sort((a, b) => {
+    items.sort((a, b) => {
           if (a.isDirectory && !b.isDirectory) return -1;
           if (!a.isDirectory && b.isDirectory) return 1;
-          return (a.label as string).localeCompare(b.label as string);
-        });
+      return (a.label as string).localeCompare(b.label as string);
+    });
 
-        return items;
+    return items;
       } catch (err) {
         console.error(`Error reading directory ${dirPath}:`, err);
         return [];
@@ -388,53 +397,99 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     return result;
   }
 
+  /**
+   * Recursively process all items in a directory, regardless of their visibility state
+   */
+  private async processDirectoryContents(dirPath: string, shouldCheck: boolean): Promise<void> {
+    try {
+      // Process this directory itself
+      const dirItem = this.itemCache.get(dirPath);
+      if (dirItem) {
+        if (shouldCheck) {
+          this.checkedPaths.add(dirPath);
+          dirItem.checkboxState = vscode.TreeItemCheckboxState.Checked;
+        } else {
+          this.checkedPaths.delete(dirPath);
+          dirItem.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
+        }
+        dirItem.clearPartialState();
+      }
+
+      // Get all files and directories recursively
+      const processEntry = async (entryPath: string): Promise<void> => {
+        try {
+          const stat = await fs.promises.stat(entryPath);
+          const isDir = stat.isDirectory();
+          const entryName = path.basename(entryPath);
+
+          // Skip if path should be excluded
+          if (!this.shouldIncludePath(entryPath)) {
+            return;
+          }
+
+          // Create or get cache entry
+          let item = this.itemCache.get(entryPath);
+          if (!item) {
+            item = new MyTreeItem(entryPath, entryName, isDir);
+            this.itemCache.set(entryPath, item);
+          }
+
+          // Update state for this item
+          if (shouldCheck) {
+            this.checkedPaths.add(entryPath);
+            item.checkboxState = vscode.TreeItemCheckboxState.Checked;
+          } else {
+            this.checkedPaths.delete(entryPath);
+            item.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
+          }
+          item.clearPartialState();
+
+          // If it's a directory, process its contents
+          if (isDir) {
+            const entries = await fs.promises.readdir(entryPath);
+            for (const childName of entries) {
+              await processEntry(path.join(entryPath, childName));
+            }
+          }
+        } catch (err) {
+          console.error(`Error processing entry ${entryPath}:`, err);
+        }
+      };
+
+      // Start recursive processing from the root directory
+      const entries = await fs.promises.readdir(dirPath);
+      for (const entry of entries) {
+        await processEntry(path.join(dirPath, entry));
+      }
+    } catch (err) {
+      console.error(`Error processing directory ${dirPath}:`, err);
+    }
+  }
+
   public async toggleCheckbox(item: MyTreeItem) {
     const isChecked = this.checkedPaths.has(item.fsPath);
     console.log(`Toggling checkbox for: ${item.fsPath}, currently checked: ${isChecked}`);
 
-    if (isChecked) {
-      // Uncheck this item and all children
-      this.checkedPaths.delete(item.fsPath);
-      item.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
-      item.clearPartialState();
-      
-      if (item.isDirectory) {
-        const files = await this.getAllFilesInFolder(item.fsPath);
-        files.forEach(file => {
-          this.checkedPaths.delete(file);
-          const cachedItem = this.itemCache.get(file);
-          if (cachedItem) {
-            cachedItem.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
-            cachedItem.clearPartialState();
-          }
-        });
-      }
-    } else {
-      // Check this item and all children
-      this.checkedPaths.add(item.fsPath);
-      item.checkboxState = vscode.TreeItemCheckboxState.Checked;
-      item.clearPartialState();
-      
-      if (item.isDirectory) {
-        const files = await this.getAllFilesInFolder(item.fsPath);
-        files.forEach(file => {
-          this.checkedPaths.add(file);
-          const cachedItem = this.itemCache.get(file);
-          if (cachedItem) {
-            cachedItem.checkboxState = vscode.TreeItemCheckboxState.Checked;
-            cachedItem.clearPartialState();
-          }
-        });
-      }
-    }
+    // Process the item and all its children
+    await this.processDirectoryContents(item.fsPath, !isChecked);
 
     // Update parent folder states recursively
-    let currentPath = item.fsPath;
-    while (currentPath !== this.workspaceFolders[0].uri.fsPath) {
-      currentPath = path.dirname(currentPath);
+    let currentPath = path.dirname(item.fsPath);
+    const rootPath = this.workspaceFolders[0].uri.fsPath;
+    
+    while (currentPath !== rootPath && currentPath !== path.dirname(currentPath)) {
       const parentItem = this.itemCache.get(currentPath);
       if (parentItem) {
         await this.updateFolderCheckState(parentItem);
+      }
+      currentPath = path.dirname(currentPath);
+    }
+
+    // Also update the root folder state if we're not already at root
+    if (item.fsPath !== rootPath) {
+      const rootItem = this.itemCache.get(rootPath);
+      if (rootItem) {
+        await this.updateFolderCheckState(rootItem);
       }
     }
 
@@ -649,8 +704,8 @@ export function activate(context: vscode.ExtensionContext) {
       
       if (!checkedPaths.length) {
         vscode.window.showInformationMessage('No items selected.');
-        return;
-      }
+          return;
+        }
 
       const xmlResult = generateXmlContent(checkedPaths);
       await vscode.env.clipboard.writeText(xmlResult);
