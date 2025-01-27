@@ -11,7 +11,7 @@ const CHECKED_PATHS_KEY = 'ai-code-exporter.checkedPaths';
 /**
  * Represents each item in the tree (folder or file).
  */
-class MyTreeItem extends vscode.TreeItem {
+export class MyTreeItem extends vscode.TreeItem {
   public children: MyTreeItem[] | undefined;
   public fsPath: string;
   public isDirectory: boolean;
@@ -56,7 +56,7 @@ class MyTreeItem extends vscode.TreeItem {
   }
 }
 
-class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
+export class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
   private _onDidChangeTreeData: vscode.EventEmitter<MyTreeItem | undefined | void> =
     new vscode.EventEmitter<MyTreeItem | undefined | void>();
   readonly onDidChangeTreeData: vscode.Event<MyTreeItem | undefined | void> =
@@ -66,6 +66,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
   public itemCache: Map<string, MyTreeItem> = new Map();
   private useGitignore: boolean = false;
   private gitignoreFilter = ignore();
+  public pathModule: typeof path;
 
   /**
    * Store all workspace folder paths. If multiple folders are open in a multi-root
@@ -73,8 +74,10 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
    */
   constructor(
     public workspaceFolders: readonly vscode.WorkspaceFolder[],
-    private context: vscode.ExtensionContext
+    private context: vscode.ExtensionContext,
+    pathModule: typeof path = path
   ) {
+    this.pathModule = pathModule;
     // Load previously stored checked paths
     const stored = context.workspaceState.get<string[]>(CHECKED_PATHS_KEY) || [];
     this.checkedPaths = new Set(stored);
@@ -114,7 +117,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
       const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
       
       // Create/update item for this directory
-      const name = path.basename(dirPath);
+      const name = this.pathModule.basename(dirPath);
       let item = this.itemCache.get(dirPath);
       if (!item) {
         item = new MyTreeItem(dirPath, name, true);
@@ -126,7 +129,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
 
       // Process all entries
       for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
+        const fullPath = this.pathModule.join(dirPath, entry.name);
         
         // Skip if path should be excluded
         if (!this.shouldIncludePath(fullPath)) {
@@ -157,7 +160,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
 
   private initGitignoreFilter() {
     if (this.workspaceFolders && this.workspaceFolders.length > 0) {
-      const gitignorePath = path.join(this.workspaceFolders[0].uri.fsPath, '.gitignore');
+      const gitignorePath = this.pathModule.join(this.workspaceFolders[0].uri.fsPath, '.gitignore');
       if (fs.existsSync(gitignorePath)) {
         const gitignoreContent = fs.readFileSync(gitignorePath, 'utf8');
         
@@ -240,9 +243,9 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     this._onDidChangeTreeData.fire();
   }
 
-  private shouldIncludePath(fullPath: string): boolean {
+  public shouldIncludePath(fullPath: string): boolean {
     // Always exclude .git directory
-    if (fullPath.includes(path.sep + '.git' + path.sep) || fullPath.endsWith(path.sep + '.git')) {
+    if (fullPath.includes(this.pathModule.sep + '.git' + this.pathModule.sep) || fullPath.endsWith(this.pathModule.sep + '.git')) {
       return false;
     }
 
@@ -250,8 +253,8 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     if (this.useGitignore && this.gitignoreFilter) {
       // Convert the full path to a relative path from workspace root
       const workspaceRoot = this.workspaceFolders[0].uri.fsPath;
-      const relativePath = path.relative(workspaceRoot, fullPath)
-        .split(path.sep)
+      const relativePath = this.pathModule.relative(workspaceRoot, fullPath)
+        .split(this.pathModule.sep)
         .join('/'); // Convert to forward slashes for consistent pattern matching
 
       // Log for debugging
@@ -279,7 +282,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     // If there is no parent element, we're at the top level.
     if (!element) {
       return this.workspaceFolders.map(folder => {
-        const folderName = folder.name || path.basename(folder.uri.fsPath);
+        const folderName = folder.name || this.pathModule.basename(folder.uri.fsPath);
         const fsPath = folder.uri.fsPath;
         
         // Check cache first
@@ -307,7 +310,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     const items: MyTreeItem[] = [];
 
     for (const name of childNames) {
-      const fullPath = path.join(dirPath, name);
+      const fullPath = this.pathModule.join(dirPath, name);
           
           // Skip if path should be excluded
           if (!this.shouldIncludePath(fullPath)) {
@@ -377,7 +380,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     try {
       const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
       for (const entry of entries) {
-        const fullPath = path.join(folderPath, entry.name);
+        const fullPath = this.pathModule.join(folderPath, entry.name);
         
         // Skip hidden/ignored paths
         if (!this.shouldIncludePath(fullPath)) {
@@ -420,7 +423,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
         try {
           const stat = await fs.promises.stat(entryPath);
           const isDir = stat.isDirectory();
-          const entryName = path.basename(entryPath);
+          const entryName = this.pathModule.basename(entryPath);
 
           // Skip if path should be excluded
           if (!this.shouldIncludePath(entryPath)) {
@@ -448,7 +451,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
           if (isDir) {
             const entries = await fs.promises.readdir(entryPath);
             for (const childName of entries) {
-              await processEntry(path.join(entryPath, childName));
+              await processEntry(this.pathModule.join(entryPath, childName));
             }
           }
         } catch (err) {
@@ -459,7 +462,7 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
       // Start recursive processing from the root directory
       const entries = await fs.promises.readdir(dirPath);
       for (const entry of entries) {
-        await processEntry(path.join(dirPath, entry));
+        await processEntry(this.pathModule.join(dirPath, entry));
       }
     } catch (err) {
       console.error(`Error processing directory ${dirPath}:`, err);
@@ -474,15 +477,15 @@ class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     await this.processDirectoryContents(item.fsPath, !isChecked);
 
     // Update parent folder states recursively
-    let currentPath = path.dirname(item.fsPath);
+    let currentPath = this.pathModule.dirname(item.fsPath);
     const rootPath = this.workspaceFolders[0].uri.fsPath;
     
-    while (currentPath !== rootPath && currentPath !== path.dirname(currentPath)) {
+    while (currentPath !== rootPath && currentPath !== this.pathModule.dirname(currentPath)) {
       const parentItem = this.itemCache.get(currentPath);
       if (parentItem) {
         await this.updateFolderCheckState(parentItem);
       }
-      currentPath = path.dirname(currentPath);
+      currentPath = this.pathModule.dirname(currentPath);
     }
 
     // Also update the root folder state if we're not already at root
@@ -589,79 +592,61 @@ ${content}
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  const folders = vscode.workspace.workspaceFolders || [];
-  const treeProvider = new ExportTreeProvider(folders, context);
-  
-  // Initialize gitignore state
-  const initialGitignoreState = context.workspaceState.get<boolean>('useGitignore') || false;
-  vscode.commands.executeCommand(
-    'setContext',
-    'ai-code-exporter.gitignoreEnabled',
-    initialGitignoreState
-  );
-  
-  // Register the tree data provider
-  const treeView = vscode.window.createTreeView('myExportTree', {
+  // Create tree data provider and register it
+  const treeProvider = new ExportTreeProvider(vscode.workspace.workspaceFolders || [], context);
+  const treeView = vscode.window.createTreeView('exportHelper', {
     treeDataProvider: treeProvider,
-    canSelectMany: false
+    canSelectMany: true
   });
 
-  // Register the checkbox toggle command
-  context.subscriptions.push(
-    vscode.commands.registerCommand('myExportTree.toggleCheckbox', async (item: MyTreeItem) => {
-      console.log('Toggle command called for:', item.fsPath);
-      await treeProvider.toggleCheckbox(item);
-    })
-  );
+  // Register commands
+  let disposable = vscode.commands.registerCommand('export-helper.exportSelected', () => {
+    // ... existing code ...
+  });
 
-  // Handle checkbox changes from the tree view
-  context.subscriptions.push(
-    treeView.onDidChangeCheckboxState(async (e) => {
-      // Process all items in a single batch to prevent multiple refreshes
-      const items = Array.from(e.items);
-      const nonDirectoryItems = items.filter(([item]) => !(item as MyTreeItem).isDirectory);
-      
-      if (nonDirectoryItems.length > 0) {
-        // Disable refresh temporarily to prevent intermediate updates
-        const tempRefresh = treeProvider.refresh.bind(treeProvider);
-        treeProvider.refresh = () => {};
+  context.subscriptions.push(disposable);
 
-        try {
-          // Process all file selections first
-          for (const [item] of nonDirectoryItems) {
-            const treeItem = item as MyTreeItem;
-            await treeProvider.toggleCheckbox(treeItem);
-          }
+  // Register checkbox state change handler
+  treeView.onDidChangeCheckboxState(async (e) => {
+    // Process all items in a single batch to prevent multiple refreshes
+    const items = Array.from(e.items);
+    const nonDirectoryItems = items.filter(([item]) => !(item as MyTreeItem).isDirectory);
+    
+    if (nonDirectoryItems.length > 0) {
+      // Disable refresh temporarily to prevent intermediate updates
+      const tempRefresh = treeProvider.refresh.bind(treeProvider);
+      treeProvider.refresh = () => {};
 
-          // Then update parent states once at the end
-          const firstItem = nonDirectoryItems[0][0] as MyTreeItem;
-          let currentPath = path.dirname(firstItem.fsPath);
-          
-          // Process parent updates sequentially
-          while (currentPath !== treeProvider.workspaceFolders[0].uri.fsPath) {
-            const parentItem = treeProvider.itemCache.get(currentPath);
-            if (parentItem) {
-              await treeProvider.updateFolderCheckState(parentItem);
-            }
-            currentPath = path.dirname(currentPath);
-          }
-        } finally {
-          // Restore refresh function and do a single refresh
-          treeProvider.refresh = tempRefresh;
-          treeProvider.refresh();
+      try {
+        // Process all file selections first
+        for (const [item] of nonDirectoryItems) {
+          const treeItem = item as MyTreeItem;
+          await treeProvider.toggleCheckbox(treeItem);
         }
+
+        // Then update parent states once at the end
+        const firstItem = nonDirectoryItems[0][0] as MyTreeItem;
+        let currentPath = treeProvider.pathModule.dirname(firstItem.fsPath);
+        
+        // Process parent updates sequentially
+        while (currentPath !== treeProvider.workspaceFolders[0].uri.fsPath) {
+          const parentItem = treeProvider.itemCache.get(currentPath);
+          if (parentItem) {
+            await treeProvider.updateFolderCheckState(parentItem);
+          }
+          currentPath = treeProvider.pathModule.dirname(currentPath);
+        }
+      } finally {
+        // Restore refresh function and do a single refresh
+        treeProvider.refresh = tempRefresh;
+        treeProvider.refresh();
       }
-    })
-  );
+    }
+  });
 
   // Register the .gitignore toggle commands
   const toggleGitignore = async (newState: boolean) => {
     await treeProvider.setUseGitignore(newState);
-    await vscode.commands.executeCommand(
-      'setContext',
-      'ai-code-exporter.gitignoreEnabled',
-      newState
-    );
     vscode.window.showInformationMessage(
       `${newState ? 'Enabled' : 'Disabled'} .gitignore support (${newState ? 'hiding' : 'showing'} ignored files)`
     );
