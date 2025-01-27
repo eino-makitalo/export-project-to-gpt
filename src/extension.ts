@@ -306,11 +306,11 @@ export class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
     if (element.isDirectory) {
       const dirPath = element.fsPath;
       try {
-    const childNames = await fs.promises.readdir(dirPath);
-    const items: MyTreeItem[] = [];
+        const childNames = await fs.promises.readdir(dirPath);
+        const items: MyTreeItem[] = [];
 
-    for (const name of childNames) {
-      const fullPath = this.pathModule.join(dirPath, name);
+        for (const name of childNames) {
+          const fullPath = this.pathModule.join(dirPath, name);
           
           // Skip if path should be excluded
           if (!this.shouldIncludePath(fullPath)) {
@@ -318,8 +318,8 @@ export class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
           }
 
           try {
-      const stat = await fs.promises.stat(fullPath);
-      const isDir = stat.isDirectory();
+            const stat = await fs.promises.stat(fullPath);
+            const isDir = stat.isDirectory();
 
             // Check cache first
             let item = this.itemCache.get(fullPath);
@@ -336,23 +336,23 @@ export class ExportTreeProvider implements vscode.TreeDataProvider<MyTreeItem> {
             }
 
             // Only set checked state if explicitly checked
-      if (this.checkedPaths.has(fullPath)) {
-        item.checkboxState = vscode.TreeItemCheckboxState.Checked;
-      }
+            if (this.checkedPaths.has(fullPath)) {
+              item.checkboxState = vscode.TreeItemCheckboxState.Checked;
+            }
 
-      items.push(item);
+            items.push(item);
           } catch (err) {
             console.error(`Error accessing ${fullPath}:`, err);
           }
-    }
+        }
 
-    items.sort((a, b) => {
+        items.sort((a, b) => {
           if (a.isDirectory && !b.isDirectory) return -1;
           if (!a.isDirectory && b.isDirectory) return 1;
-      return (a.label as string).localeCompare(b.label as string);
-    });
+          return (a.label as string).localeCompare(b.label as string);
+        });
 
-    return items;
+        return items;
       } catch (err) {
         console.error(`Error reading directory ${dirPath}:`, err);
         return [];

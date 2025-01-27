@@ -36,8 +36,14 @@ class MockFileSystem {
 		let pathStr = '';
 		if (p instanceof vscode.Uri) {
 			pathStr = p.fsPath;
-		} else if (typeof p === 'object' && p !== null && 'fsPath' in p) {
-			pathStr = (p as { fsPath: string }).fsPath;
+		} else if (typeof p === 'object' && p !== null) {
+			if ('fsPath' in p) {
+				pathStr = (p as { fsPath: string }).fsPath;
+			} else if ('path' in p) {
+				pathStr = (p as { path: string }).path;
+			} else {
+				pathStr = p.toString();
+			}
 		} else {
 			pathStr = p.toString();
 		}
@@ -56,19 +62,98 @@ class MockFileSystem {
 
 	private resolveWorkspacePath(p: fs.PathLike | vscode.Uri): string {
 		const normalized = this.normalizePath(p);
-		if (normalized.includes(this.workspaceRoot)) {
+		console.log('Resolving workspace path:', p instanceof vscode.Uri ? p.fsPath : p.toString());
+		console.log('Normalized:', normalized);
+		console.log('Workspace root:', this.workspaceRoot);
+
+		// Special case for workspace root
+		if (normalized === this.workspaceRoot || normalized === '/mock/workspace') {
+			return this.workspaceRoot;
+		}
+
+		// Handle paths that are already absolute
+		if (normalized.startsWith('/mock/workspace/')) {
 			return normalized;
 		}
+
+		// Handle paths that are relative to the workspace root
+		if (normalized.startsWith('/')) {
+			return normalized;
+		}
+
+		// Handle Windows-style paths
+		if (normalized.includes('\\mock\\workspace')) {
+			return normalized.replace(/\\/g, '/');
+		}
+
 		return this.normalizePath(path.join(this.workspaceRoot, normalized));
 	}
 
-	async readdir(dirPath: fs.PathLike): Promise<fs.Dirent[]> {
+	async stat(path: fs.PathLike | vscode.Uri): Promise<fs.Stats> {
+		const normalizedPath = this.resolveWorkspacePath(path);
+		console.log('Attempting to stat path:', path instanceof vscode.Uri ? path.fsPath : path.toString());
+		console.log('Normalized path:', normalizedPath);
+		
+		// Special case for workspace root
+		if (normalizedPath === this.workspaceRoot) {
+			return {
+				isDirectory: () => true,
+				isFile: () => false,
+				size: 0,
+				atimeMs: Date.now(),
+				mtimeMs: Date.now(),
+				ctimeMs: Date.now(),
+				birthtimeMs: Date.now(),
+				atime: new Date(),
+				mtime: new Date(),
+				ctime: new Date(),
+				birthtime: new Date()
+			} as fs.Stats;
+		}
+
+		const isDirectory = this.files.get(normalizedPath) === null || 
+			Array.from(this.files.keys()).some(p => 
+				p.startsWith(normalizedPath + '/') && p !== normalizedPath
+			);
+
+		if (!this.files.has(normalizedPath) && !isDirectory) {
+			console.error(`Error accessing ${normalizedPath}: File not found`);
+			console.log('Available paths:', Array.from(this.files.keys()));
+			throw new Error('ENOENT: no such file or directory');
+		}
+
+		return {
+			isDirectory: () => isDirectory,
+			isFile: () => !isDirectory,
+			size: 0,
+			atimeMs: Date.now(),
+			mtimeMs: Date.now(),
+			ctimeMs: Date.now(),
+			birthtimeMs: Date.now(),
+			atime: new Date(),
+			mtime: new Date(),
+			ctime: new Date(),
+			birthtime: new Date()
+		} as fs.Stats;
+	}
+
+	async readdir(dirPath: fs.PathLike | vscode.Uri): Promise<fs.Dirent[]> {
 		const normalizedPath = this.resolveWorkspacePath(dirPath);
+		console.log('Attempting to readdir:', dirPath);
+		console.log('Normalized path:', normalizedPath);
+		
 		const entries: fs.Dirent[] = [];
 		
 		// Check if directory exists
-		if (!this.files.has(normalizedPath)) {
-			throw new Error('ENOENT: no such file or directory');
+		const isDirectory = this.files.get(normalizedPath) === null || 
+			Array.from(this.files.keys()).some(p => 
+				p.startsWith(normalizedPath + '/') && p !== normalizedPath
+			);
+
+		if (!isDirectory) {
+			console.error(`Error accessing ${normalizedPath}: Not a directory`);
+			console.log('Available paths:', Array.from(this.files.keys()));
+			throw new Error('ENOTDIR: not a directory');
 		}
 		
 		for (const [path] of this.files) {
@@ -98,32 +183,6 @@ class MockFileSystem {
 			}
 		}
 		return entries;
-	}
-
-	async stat(path: fs.PathLike): Promise<fs.Stats> {
-		const normalizedPath = this.resolveWorkspacePath(path);
-		const isDirectory = this.files.get(normalizedPath) === null || 
-			Array.from(this.files.keys()).some(p => 
-				p.startsWith(normalizedPath + '/') && p !== normalizedPath
-			);
-
-		if (!this.files.has(normalizedPath) && !isDirectory) {
-			throw new Error('ENOENT: no such file or directory');
-		}
-
-		return {
-			isDirectory: () => isDirectory,
-			isFile: () => !isDirectory,
-			size: 0,
-			atimeMs: Date.now(),
-			mtimeMs: Date.now(),
-			ctimeMs: Date.now(),
-			birthtimeMs: Date.now(),
-			atime: new Date(),
-			mtime: new Date(),
-			ctime: new Date(),
-			birthtime: new Date()
-		} as fs.Stats;
 	}
 }
 
@@ -261,7 +320,7 @@ suite('Extension Test Suite', () => {
 		];
 
 		// Create mock file system with test structure
-		const mockFs = new MockFileSystem([...testDirs, ...testFiles], mockWorkspaceUri.fsPath);
+		const mockFs = new MockFileSystem([...testDirs, ...testFiles], mockWorkspaceUri);
 		const mockPath = new MockPath();
 
 		const mockContext = {
@@ -279,8 +338,52 @@ suite('Extension Test Suite', () => {
 		const originalReaddir = fs.promises.readdir;
 		const originalStat = fs.promises.stat;
 
-		fs.promises.readdir = mockFs.readdir.bind(mockFs) as any;
-		fs.promises.stat = mockFs.stat.bind(mockFs) as any;
+		fs.promises.readdir = (async (path: fs.PathLike, options?: { withFileTypes?: boolean } | undefined) => {
+			const result = await mockFs.readdir(path);
+			if (options?.withFileTypes) {
+				return result;
+			}
+			return result.map(dirent => dirent.name);
+		}) as typeof fs.promises.readdir;
+
+		fs.promises.stat = (async (path: fs.PathLike, options?: fs.StatOptions | undefined) => {
+			const result = await mockFs.stat(path);
+			if (options?.bigint) {
+				const bigIntStats = {
+					dev: BigInt(0),
+					ino: BigInt(0),
+					mode: BigInt(0),
+					nlink: BigInt(1),
+					uid: BigInt(0),
+					gid: BigInt(0),
+					rdev: BigInt(0),
+					size: BigInt(0),
+					blksize: BigInt(4096),
+					blocks: BigInt(0),
+					atimeMs: BigInt(result.atimeMs),
+					mtimeMs: BigInt(result.mtimeMs),
+					ctimeMs: BigInt(result.ctimeMs),
+					birthtimeMs: BigInt(result.birthtimeMs),
+					atimeNs: BigInt(result.atimeMs * 1_000_000),
+					mtimeNs: BigInt(result.mtimeMs * 1_000_000),
+					ctimeNs: BigInt(result.ctimeMs * 1_000_000),
+					birthtimeNs: BigInt(result.birthtimeMs * 1_000_000),
+					isFile: result.isFile,
+					isDirectory: result.isDirectory,
+					isBlockDevice: result.isBlockDevice,
+					isCharacterDevice: result.isCharacterDevice,
+					isSymbolicLink: result.isSymbolicLink,
+					isFIFO: result.isFIFO,
+					isSocket: result.isSocket,
+					atime: result.atime,
+					mtime: result.mtime,
+					ctime: result.ctime,
+					birthtime: result.birthtime
+				};
+				return bigIntStats as fs.BigIntStats;
+			}
+			return result;
+		}) as typeof fs.promises.stat;
 
 		try {
 			// Get root children
